@@ -1,0 +1,264 @@
+---
+title: "lab 10"
+author: "Anne-Marie Parkinson and Hannah Garcia-something"
+date: "December 3, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(janitor)
+library(corrplot)
+library(beepr)
+library(praise)
+library(stargazer)
+library(sf)
+library(gganimate)
+library(transformr)
+library(magick)
+```
+### Objectives
+
+- multiple linear regression
+- first map with sf and ggplot
+
+
+### 1. learn new fun r functions
+
+```{r}
+beep(3) # plays sound when a code is done running can choose number from 1-12 to pick diff sounds
+praise() # gives random phrases of praise'
+praise("you are totally ${adjective}! Super ${EXCLAMATION}") # use ${ } with function of praise inside to create custom phrases with cycled adjectives, etc. 
+
+```
+
+
+### 2. multiple linear regression: SLO home prices
+
+```{r}
+#load data
+homes <- read_csv("slo_homes.csv") %>% 
+  clean_names()
+
+# sub data: only include data from 3 cities
+homes_sub <- homes %>% 
+  filter(city %in% c("San Luis Obispo", "Atascadero", "Arroyo Grande"))
+
+```
+
+are there correlations btw variables that we'd consider ewhile trying to model home price?
+
+```{r}
+homes_cor <- cor(homes_sub [2:5]) # brackets= means only consider these columns
+homes_cor
+
+corrplot(homes_cor,
+         method = "ellipse",
+         type = "upper")
+#=visualize correlation btw variables. have to create the correltaion matrix then use that data in corrplot(), cant put original data in corrplot()
+# corrplot is redudant so add in type parameter to limit the graph so only shows the relationship btw variables once instead of twice (which is confusing)
+
+
+```
+
+also use scatterplots to examine correlations
+```{r}
+#ggplot ()+ geom_point()
+
+```
+
+lets start with a complete model (city, bedrooms, bathrooms, sq ft, and sale status)
+
+```{r}
+homes_lm <- lm(formula = price ~ city + bathrooms+ bedrooms + sq_ft + status, data=homes_sub)
+
+summary(homes_lm)
+
+# can reorder categorical variables so the one you want to be the reference to befirst in the list, bc r has the firt variable in the categorical var to be listed as the reference 
+```
+
+intercept= 184,130
+
+equation: price = 184,130 + 167396(atascadero) + 31018(slo) - 161645(bed) + 48692(bath) + 389(sq_ft) + 303964(regular) - 19828(short)
+
+concerning variable= bedrooms. we expect home price to decrease by $160,000 for every additional room, which, bc weve done lit review adn understand our variables and how they influence home rpice outside of this model, we know is unrealistic. 
+
+bathrooms, baedrooms, and sq ft is essentially getting at the same thing: home size, so this colliniearity is likely causing the negative bedroom assoc. so best to choose just one var
+
+p= 0, so out model predicts home price sig bettr than random chance
+
+```{r}
+homes_lm2 <- lm(price ~ sq_ft + status + city, data=homes_sub)
+
+summary(homes_lm2)
+```
+
+AIC: compare models (should do this after picking varibales that make the most conceptual sense)
+
+```{r}
+AIC(homes_lm)
+AIC(homes_lm2)
+```
+
+model  1 has lower AIC--> good example why shouldnt base decision on which model to choose, just on AIC! conceptually the first model does not make sense bc of the negative bedroom coefficient!!! 
+
+okay to use aic to pick models when don't know which model is better. 
+
+### check assumptions for normality and homoscedasticity 
+
+for linear regression, we want to look at the distribution of the RESIDUALS!!! NOT the dist of the actual data points
+
+
+```{r}
+plot(homes_lm) 
+# looks like assumption of constant variances of residuals (ie homoscedasicity) is met (dont let a couple outliers sway your opinion )
+# assumption of residual normality is also met
+
+plot(homes_lm2)
+
+# the numbers by the outlier plots refers to the row number in the data, so can look at the outliers
+```
+
+cooks dist = measure of leverage a single point has on model fit . vaue >0.5 means that value has unusually high impact on model fit. Doesnt mean you can just remove that point, should consider other factors before you do that. 
+
+make regression table using stargazer (doing it by hand is a pain)
+```{r, results="asis"}
+
+# use stargazer to report results of linear regression
+stargazer(homes_lm2, type='html')  
+
+
+```
+
+ressults='asis' tells r to ...put table in knitted html file?
+
+lets make some predicitons for home price based on a new data frame. make sure the variables created for the new data frame match the vairables that the model will be looking for (ie some capitalization, spelling, special characters, etc)
+
+```{r}
+new_df <- data.frame(
+  city = rep(c("San Luis Obispo", "Arroyo Grande", "Atascadero"), each=10),
+  sq_ft = rep(seq(1000, 5000, length=10)),
+  status = "Regular"
+)
+```
+for categorical variables: rep=reapeat the observations 10 times
+ word before = sign is the column header
+for numeric values: rep=repeat, seq=sequence, #1, #2 = means i want values between 1000 - 5000sqft, length = means the spacing desired between values 
+
+
+Now make preditions
+
+```{r}
+predict_df <-  predict(homes_lm2, newdata=new_df)
+predict_df
+
+#bind together the new df with the prediciotns so its easier to see
+full_data <- data.frame(new_df, predict_df)
+full_data
+```
+
+now plot in ggplot 
+
+```{r}
+ggplot() +
+  geom_point(data=homes_sub, 
+             aes(x=sq_ft, y=price, color=city, pch=city)) +
+  geom_line(data = full_data,
+            aes(x = sq_ft, 
+                y = predict_df,
+                color = city)) +
+  scale_color_manual(values = c("orange", "magenta", "black")) +
+  theme_light()
+```
+
+### our first map (thanks sf package)
+
+great bc has sticky geometries. so when get bunch of spatial data with lots of attributes. So when wrangle data (ex/ select, filter, etc), all the original attributes will stick with the data point even if it doesnt show in the subdata
+
+sf = useful for gis data and layers
+
+```{r}
+dams <- read_csv("ca_dams.csv") %>% 
+  clean_names() %>% 
+  drop_na(longitude) %>% 
+  drop_na(latitude) %>% 
+  drop_na(year_completed)
+```
+
+
+r doesnt recognize lat and longitude as spatial data. --> so convert our data frame to an sf object using st_as_sf
+
+```{r}
+dams_sf <- st_as_sf(dams, coords=c("longitude", "latitude"))
+
+st_crs(dams_sf) <- 4326  # = computes/assigns coordinate system of the spatial data (lat, long)
+
+class(dams_sf)
+```
+make sure to input the actual column names for lat and long. some times theyre called other things like lat and long
+
+
+
+```{r}
+#plot lat and long
+plot(dams_sf)
+
+# in and of its self, the points are not as intersting/meaningful, but will be when we add a spatial map to overlay the points on (ie map of CA)
+
+#add map (CA boundary)
+ca_border <-  read_sf(here::here("ca_state_border"), layer="CA_State_TIGER2016") 
+#shape files tend to have several files, so this code lets you read in all files with the same suffix so dont have to load the shapefiles supporting files one by one
+
+#view(ca_border)# --> = data frame for the shapefile appears as a single row. spatial data is in last column. likely to have more rows is have more states. but depends on the shapefile
+
+plot(ca_border)
+```
+
+
+
+```{r}
+ggplot() +
+  geom_sf(data=dams_sf, color="orange", size=1, alpha=0.4)
+
+ggplot()+
+  geom_sf(data=ca_border, fill="purple", color="green") 
+
+ggplot()+
+  geom_sf(data=ca_border, fill="purple", color="green") +
+  theme_void()
+
+ggplot() +
+  geom_sf(data=ca_border) +
+  geom_sf(data=dams_sf) +
+  theme_bw()
+```
+
+### gganimate
+
+animated maps dont show up in rmarkdown, so have to knit afterwards
+```{r}
+
+ggplot() +
+  geom_sf(data=ca_border) +
+  geom_sf(data=dams_sf, 
+          color="blue", 
+          alpha=0.5,
+          size=1) +
+  theme_void() +
+  labs(title='Year: {round(frame_time,0)}') + # shows title so audience knows what the points represent. frame time is not a value we created but is an sf function.
+  transition_time(year_completed) +
+  shadow_mark()  # default is to have points dissapear after they appear, this code makes sure they stay visable
+  
+
+
+```
+
+
+
+
+
+
